@@ -1,0 +1,306 @@
+import numpy as np
+import cvxpy as cp
+from itertools import combinations, combinations_with_replacement
+from numpy.linalg import svd, norm
+import matplotlib.pyplot as plt
+import gurobipy as gp
+from gurobipy import GRB
+
+options = {
+    "WLSACCESSID": "b9ef503e-1f4a-422b-8cc3-f9d066cadf5b",
+    "WLSSECRET": "2c071418-a3d6-46f0-ac3b-4f1bb716695c",
+    "LICENSEID": 2511271,
+}
+
+# Configuration
+num_bits = 2  # Number of bits
+num_states = 2**num_bits  # Number of states
+num_users = 8  # Number of users
+num_messages = num_states**num_users  # Number of messages
+num_channels = num_states*num_users  # Number of channels
+loss_factor = 1  # Loss factor
+num_time_slots = 2  #Number of time slots
+scalar = 0.99999  # Scale factor
+num_ite = 20  # Number of iterations
+
+# Define parameters for the Gaussian noise
+mean = 0       # Mean of the distribution
+start = 0.1
+stop = 1
+step = 0.05
+std_dev_vector = np.arange(start, stop, step) # noise variance of the simulation
+matrix_NMSE = np.zeros((1, len(std_dev_vector))) # NMSE of the simulation
+print("std_dev_vector", std_dev_vector)
+
+# Function selection
+function_name = 'prod'  # Choose the function: 'prod', 'max', 'norm', 'max', 'frac1', 'frac2'
+
+# Function definition
+def evaluate_function(values, function_name):
+    """
+    Function to evaluate different types of functions
+    Args:
+    values: input values
+    function_name: name of the function to evaluate
+    Returns:
+    result of the evaluated function
+    """
+    if function_name == 'frac1':
+        pairwise_product = values[0]*values[1] + values[1]*values[2] + values[2]*values[0]
+        square_values = values[2]**2 + values[0]**2 + values[1]**2
+        return square_values + 3*pairwise_product
+    elif function_name == 'frac2':
+        ratio1 = (values[0]+1) / (values[1]+1)
+        ratio2 = (values[2]+3) / (values[3]+1)
+        return ratio1 + ratio2
+    elif function_name == 'prod':
+        return np.prod(values)
+    elif function_name == 'sum':
+        return np.sum(values)
+    elif function_name == 'max':
+        return np.max(values)
+    elif function_name == 'norm':
+        return norm(values)
+
+def optimize_MIQCP_problem(model, num_states, num_time_slots, matrix_d_i_j, matrix_delta, W, is_binary):
+    print("MIQCP start.....")
+    model.setParam('OutputFlag', 0)  # Turn off Gurobi output to console
+    model.setParam('NonConvex', 2)
+    model.setParam('ScaleFlag',2)
+
+    # Define the decision variables as binary variables for each time slot
+    num_variables = num_states
+    x=np.zeros((num_variables, num_time_slots))
+    x = model.addVars(num_variables, num_time_slots, vtype=GRB.BINARY, name="x")
+    
+    # Set the objective function
+    objective = gp.quicksum(x[i, j] for i in range(num_variables) for j in range(num_time_slots))
+    model.setObjective(objective, GRB.MINIMIZE)  # or GRB.MINIMIZE, depending on your optimization goal
+        
+    # Add constraints (with complex coefficients) for each time slot
+    num_constraints = len(matrix_d_i_j)
+    for i in range(num_constraints):
+        distance_sq = 0
+        matrix_d_i_j_temp = matrix_d_i_j[i]
+
+        for l in range(num_time_slots): 
+            distance_sq += gp.quicksum(x[j, l] * matrix_d_i_j_temp[j, k] * x[k, l] for j in range(num_variables)
+                            for k in range(num_variables))      
+        model.addConstr(distance_sq >= matrix_delta[i], name=f"Constraint{i+1}")
+
+    column_constraint = max(int((1 / num_time_slots - 0.1) * num_variables), 1)
+    for i in range(num_variables):
+        model.addConstr(gp.quicksum(x[i, j] for j in range(num_time_slots)) >= 1, name=f"Row_Constraint{i+1}")
+    for j in range(num_time_slots):
+        model.addConstr(gp.quicksum(x[i, j] for i in range(num_variables)) >= column_constraint, name=f"Column_Constraint{j+1}")
+    
+    if is_binary == 0:
+        model.relax()
+    model.optimize()
+
+    # Optimize the model for each time slot
+    for l in range(num_time_slots):
+        if model.status == GRB.OPTIMAL:
+            optimal_x_l = [x[j, l].X for j in range(num_variables)]
+            optimal_objective_value = model.ObjVal
+            print(f"Optimal x for Time Slot {l+1}:", optimal_x_l)
+            matrix_Y[:, l] = optimal_x_l
+            print(f"Optimal objective value for Time Slot {l+1}:", optimal_objective_value)
+        else:
+            print(f"Optimization failed for Time Slot {l+1}. Status:", model.status)
+            break
+    obj_res.append(model.ObjVal)
+    return matrix_Y
+
+
+# Calculate the number of all possible cases
+num_cases = int(num_messages * (num_messages - 1) / 2)
+
+# Generate input domain values
+input_domain = [n+1 for n in range(num_states)]
+
+# Generate all values in the domain
+domain_values = list(combinations_with_replacement(input_domain, num_users))
+num_combinations = len(domain_values)
+
+# Initialize function range
+function_range = np.zeros(num_combinations)
+
+# Calculate function range 
+for idx in range(num_combinations):
+    function_range[idx] = evaluate_function(domain_values[idx], function_name)
+
+# Generate matrix A
+matrix_A = np.zeros((num_combinations, num_channels))
+count = 0
+for ele in domain_values:
+    for idx in range(num_users):
+        matrix_A[count, idx * num_states + ele[idx]-1] = 1
+    count += 1
+
+# Initialize a sum matrix of zeros with the same number of rows as the input matrix
+sum_matrix_A = np.zeros((num_combinations, num_states))
+
+# Sum up every num_states columns group
+for i in range(num_users):
+    start_index = i * num_states
+    end_index = start_index + num_states
+    sum_matrix_A += matrix_A[:, start_index:end_index]
+    
+combinations_counter = [ele for ele in combinations(range(num_combinations), 2)]
+obj_res = []
+
+# Initialize the coding matrix
+matrix_Y = np.zeros((num_states, num_time_slots))
+num_rows = matrix_Y.shape[0]
+for i in range(num_rows):
+    matrix_Y[i, (i)%num_time_slots] = 1
+
+for ite in range(1, num_ite):
+    # Remove zero input values from distance matrices
+    distance_function = []
+    distance_matrix_B = []
+    count = 0
+    print("iteration start...", ite)
+    
+    # Generate the decision variable
+    X = cp.Variable((num_states, num_states), PSD=True)
+
+    for f in combinations(function_range, 2):
+        if abs(f[0] - f[1]) != 0:
+            # Compute loss factor
+            temp_f = loss_factor * abs(f[0] - f[1])
+            distance_function.append(temp_f)
+
+            # Precompute difference for sum_matrix_A
+            ele = combinations_counter[count]
+            diff_A = sum_matrix_A[ele[0]] - sum_matrix_A[ele[1]]
+
+            # Vectorize the summation over all time slots
+            temp_Y = matrix_Y.T  # Shape: (num_time_slots, num_states)
+            weighted_diff = temp_Y * diff_A  # Element-wise multiply, shape: (num_time_slots, num_states)
+            sum_A = weighted_diff.T @ weighted_diff  # Shape: (num_states, num_states)
+
+            # Compute trace_B
+            trace_B = cp.trace(sum_A @ X)
+            distance_matrix_B.append(trace_B)
+        count += 1
+
+    # Construct the problem.
+    objective = cp.Minimize(cp.trace(X)) 
+    length = len(distance_function)      
+    constraints = [distance_matrix_B[idx] >= distance_function[idx] for idx in range(length)]
+    prob = cp.Problem(objective, constraints)
+
+    # Solve the problem
+    result = prob.solve('SCS', use_indirect=True, verbose=False)
+
+    # Extract and scale the singular vectors
+    X = X.value
+    
+    # Solve MIP to get the optimal time slot vector
+    matrix_d_i_j = [] 
+    matrix_delta = []
+    distance_function = []
+    count = 0
+    for f in combinations(function_range, 2):
+        if abs(f[0] - f[1]) != 0:
+            temp_f = scalar * loss_factor * abs(f[0] - f[1]) 
+            distance_function.append(temp_f)
+            ele = combinations_counter[count]
+            temp_d_i_j = np.outer(sum_matrix_A[ele[0]] - sum_matrix_A[ele[1]], sum_matrix_A[ele[0]] - sum_matrix_A[ele[1]]) * X
+            matrix_d_i_j.append(temp_d_i_j)
+            minimum_delta = temp_f          
+            matrix_delta.append(minimum_delta)
+        count += 1
+    
+    with gp.Env(params=options) as env:
+        with gp.Model(env=env) as model:
+            try:
+                matrix_Y = optimize_MIQCP_problem(model, num_states, num_time_slots, matrix_d_i_j, matrix_delta, X, 0)
+            except:
+                raise
+    if ite == num_ite:
+        with gp.Env(params=options) as env:
+            with gp.Model(env=env) as model:
+                try:
+                    matrix_Y = optimize_MIQCP_problem(model, num_states, num_time_slots, matrix_d_i_j, matrix_delta, X, 1)
+                except:
+                    raise
+        break
+
+# Extract and scale the singular vectors
+U, s, vh = svd(X, full_matrices=True)
+u0 = 1 * U[:, 0]
+u1 = 1 * U[:, 1]
+x = []
+y = []
+for idx in range(num_users):
+    x.append(u0[idx * num_states:(idx + 1) * num_states])
+    y.append(u1[idx * num_states:(idx + 1) * num_states])
+
+s_real = np.concatenate([x[i] for i in range(num_users)])  # real part of d_ij matrix
+s_imag = np.concatenate([y[i] for i in range(num_users)])  # imaginary part of d_ij matrix
+s = 1*s_real + 1j * s_imag*1  # Combine to form complex s matrix
+
+# generate Voronio
+matrix_S = np.transpose(np.tile(s, (num_time_slots, 1)))
+matrix_mid = matrix_S * matrix_Y
+matrix_Z = sum_matrix_A @ matrix_mid
+vector_Z = sum_matrix_A @ s
+mont_cnt = 100
+for std_idx in range(len(std_dev_vector)):
+    numerator = 0
+    denominator = 0
+    # simulate for different random conditions
+    for mont_num in range(mont_cnt):
+        # Generate Gaussian noise
+        gaussian_noise = np.random.normal(mean, std_dev_vector[std_idx], num_time_slots * num_combinations)
+        gaussian_noise = gaussian_noise.reshape((num_combinations, num_time_slots))
+        matrix_Z_noise = matrix_Z + gaussian_noise
+
+        # Get the number of rows and columns in the matrix
+        num_rows, num_cols = matrix_Z_noise.shape
+
+        # Initialize an empty list to store the summed matrices
+        summed_matrices = []
+
+        # Iterate over each remainder when dividing by num_time_slot
+        for remainder in range(num_time_slots):
+            # Get the indices of the columns with the same remainder
+            col_indices = [col_idx for col_idx in range(num_cols) if col_idx % num_time_slots == remainder]
+            
+            # Sum up the columns and append the result to the list
+            summed_matrix = np.sum(matrix_Z_noise[:, col_indices], axis=1) 
+            summed_matrices.append(summed_matrix)
+
+        # Stack the summed matrices horizontally to form the new matrix
+        result_avg_matrix = np.column_stack(summed_matrices)
+
+        for i in range(num_combinations):
+            distances = np.linalg.norm(matrix_Z - result_avg_matrix[i], axis=1)
+            min_index = np.argmin(distances)
+            numerator += (function_range[i] - function_range[min_index]) ** 2
+            denominator += function_range[i] ** 2
+
+    # Calculate the NMSE    
+    matrix_NMSE[0][std_idx] = numerator / denominator
+
+print(f"Parameters:\nNumber of Bits: {num_bits}\nNumber of States: {num_states}\nNumber of Users: {num_users}\nNumber of Time Slots: {num_time_slots}")
+plt.figure(figsize=(8, 6))
+# Loop through the rows of NMSE and plot each row as a separate line
+for i in range(matrix_NMSE.shape[0]):
+    plt.plot(std_dev_vector, matrix_NMSE[i], marker='o', linestyle='-', label=f'L={2*i+2}')
+    print('NMSE:', matrix_NMSE[i])
+plt.xlabel('noise variance')
+plt.ylabel('NMSE')
+plt.title('noise variance vs. NMSE')
+plt.yscale('log')  # Set y-axis to logarithmic scale
+plt.grid(True)
+plt.legend()
+plt.show()
+
+
+
+
+
