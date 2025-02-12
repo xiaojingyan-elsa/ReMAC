@@ -45,15 +45,7 @@ def evaluate_function(values, function_name):
     Returns:
     result of the evaluated function
     """
-    if function_name == 'frac1':
-        pairwise_product = values[0]*values[1] + values[1]*values[2] + values[2]*values[0]
-        square_values = values[2]**2 + values[0]**2 + values[1]**2
-        return square_values + 3*pairwise_product
-    elif function_name == 'frac2':
-        ratio1 = (values[0]+1) / (values[1]+1)
-        ratio2 = (values[2]+3) / (values[3]+1)
-        return ratio1 + ratio2
-    elif function_name == 'prod':
+    if function_name == 'prod':
         return np.prod(values)
     elif function_name == 'sum':
         return np.sum(values)
