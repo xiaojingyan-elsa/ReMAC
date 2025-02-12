@@ -1,7 +1,7 @@
 # ReMAC
 # ReMAC Simulation and Optimization
 
-This repository contains a Python implementation for evaluating the performance of **ReMAC, ChannelComp, and Bit-Slicing** in the presence of fading channels. The script optimizes transmission schemes using **Mixed-Integer Quadratic Constrained Programming (MIQCP)** and evaluates function computations under noisy conditions.
+This repository contains a Python implementation for evaluating the performance of **ReMAC, ChannelComp, and Bit-Slicing** in the presence of fading channels. The script evaluates function computations under noisy conditions.
 
 ## 📌 Features
 - **Function Evaluation**: Computes sum, product, max, norm, and fraction-based functions for multi-user networks.
@@ -44,4 +44,18 @@ The **Normalized Mean Squared Error (NMSE)** is plotted against different noise 
 - **Y-axis**: NMSE (Log Scale)
 - **Results**: Performance of ReMAC
 
+## 🔑 License
+
+This project is intended for **research and academic purposes**. 
+
+- If you use this code in your research, please cite relevant sources appropriately.
+- Ensure compliance with **Gurobi's licensing terms** when using the solver for optimization.
+- The authors are not responsible for any unintended consequences resulting from the use of this code.
+
+For more details on **Gurobi licensing**, visit:  
+🔗 [Gurobi Licensing Guide](https://www.gurobi.com/documentation/)
+
+---
+
+📌 **Disclaimer:** This project is provided **as-is** without any warranty. Users are responsible for verifying the correctness and suitability of the implementation for their specific applications.
 
